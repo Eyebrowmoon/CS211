@@ -176,28 +176,23 @@ int logicalShift(int x, int n) {
  *   Rating: 4
  */
 int bitCount(int x) {
-  int mask55 = 0x55; // Repeat 01010101
-  int mask33 = 0x33; // Repeat 00110011
-  int mask0f = 0x0f; // Repeat 00001111
+  int mask55; // Repeat 01010101
+  int mask33; // Repeat 00110011
+  int mask0f; // Repeat 00001111
   int maskff = 0xff; // Repeat 0000000011111111
   int maskhalf = maskff | (maskff << 8); // 16 0s and 16 1s
 
-  mask55 |= mask55 << 8;
-  mask55 |= mask55 << 16;
-
-  mask33 |= mask33 << 8;
-  mask33 |= mask33 << 16;
-
-  mask0f |= mask0f << 8;
-  mask0f |= mask0f << 16;
-
   maskff |= maskff << 16;
+
+  mask0f = maskff ^ (maskff << 4);
+  mask33 = mask0f ^ (mask0f << 2);
+  mask55 = mask33 ^ (mask33 << 1);
 
   x = (x & mask55) + ((x >> 1) & mask55);
   x = (x & mask33) + ((x >> 2) & mask33);
-  x = (x & mask0f) + ((x >> 4) & mask0f);
-  x = (x & maskff) + ((x >> 8) & maskff);
-  x = (x & maskhalf) + ((x >> 16) & maskhalf);
+  x = (x + (x >> 4)) & mask0f;
+  x = (x + (x >> 8)) & maskff;
+  x = (x + (x >> 16)) & maskhalf;
 
   return x;
 }
