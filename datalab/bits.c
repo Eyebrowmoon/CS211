@@ -244,7 +244,7 @@ int fitsBits(int x, int n) {
  *   Rating: 2
  */
 int divpwr2(int x, int n) {
-  int signMask = x >> 31;
+  int signMask = x >> 31; // 1111... if neg, 000... if pos.
   int addTerm = ~(signMask << n);
 
   return (x + (addTerm & signMask)) >> n;
@@ -303,6 +303,8 @@ int ilog2(int x) {
   int result;
   int pivot;
 
+  // Find most significant 1 in similary way to binary search
+ 
   pivot = (!!(x >> 16)) << 4;
   result = pivot;
   x >>= pivot;
@@ -376,9 +378,12 @@ unsigned float_i2f(int x) {
     exp += exp_lsb;
   }
 
+  // If remainder is larger than half,
+  // or equal to half, LSB is 1.
   if (round_bit)
     value += (round_remainder || (value & 0x1));
 
+  // Exp increased by rounding
   if (value == 0x1000000) {
     value = value >> 1;
     exp += exp_lsb;
