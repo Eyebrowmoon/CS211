@@ -139,7 +139,7 @@ NOTES:
  *   Rating: 1
  */
 int bitAnd(int x, int y) {
-  return ~(~x | ~y);
+  return ~(~x | ~y); // A AND B = ~ (~A OR ~B)
 }
 /* 
  * getByte - Extract byte n from word x
@@ -152,7 +152,7 @@ int bitAnd(int x, int y) {
 int getByte(int x, int n) {
   int numShift = n << 3;
 
-  return (x >> numShift) & 0xFF;
+  return (x >> numShift) & 0xFF; // Move n-th byte to LSB position, and take mask.
 }
 /* 
  * logicalShift - shift x to the right by n, using a logical shift
@@ -164,7 +164,7 @@ int getByte(int x, int n) {
  */
 int logicalShift(int x, int n) {
   int arithShift = x >> n;
-  int mask = ~(((1 << 31) >> n) << 1);
+  int mask = ~(((1 << 31) >> n) << 1); // n bits of zero from MSB, and all others are one.
 
   return arithShift & mask;
 }
@@ -187,6 +187,8 @@ int bitCount(int x) {
   mask0f = maskff ^ (maskff << 4);
   mask33 = mask0f ^ (mask0f << 2);
   mask55 = mask33 ^ (mask33 << 1);
+
+  // Parallel, divide and conquer adding of bits
 
   x = (x & mask55) + ((x >> 1) & mask55);
   x = (x & mask33) + ((x >> 2) & mask33);
@@ -230,9 +232,11 @@ int tmin(void) {
  *   Rating: 2
  */
 int fitsBits(int x, int n) {
-  int xPos = x ^ (x >> 31);
+  int xPos = x ^ (x >> 31); // Take negation if x is negative
   int nMinusOne = n + ~0;
 
+  // And check whether the most significant one is in n-1 bytes from LSB.
+  // (Not n because of the sign bit)
   return !(xPos >> nMinusOne);
 }
 /* 
@@ -257,7 +261,7 @@ int divpwr2(int x, int n) {
  *   Rating: 2
  */
 int negate(int x) {
-  return ~x + 1;
+  return ~x + 1; // Just formula from the lecture note
 }
 /* 
  * isPositive - return 1 if x > 0, return 0 otherwise 
@@ -303,7 +307,7 @@ int ilog2(int x) {
   int result;
   int pivot;
 
-  // Find most significant 1 in similary way to binary search
+  // Find most significant 1 in similar manner to binary search
  
   pivot = (!!(x >> 16)) << 4;
   result = pivot;
@@ -338,7 +342,7 @@ unsigned float_neg(unsigned uf) {
   int uf_nosign = uf & 0x7fffffff;
   int exp_bit = 0x7f800000;
 
-  if (uf_nosign > exp_bit) 
+  if (uf_nosign > exp_bit) // If exponent bit is 0x7f800000 and mentissa is nonzero
     return uf;
   else
     return uf ^ (0x80000000);
@@ -414,10 +418,10 @@ unsigned float_twice(unsigned uf) {
 
   int uf_exp = uf & exp_bit;
 
-  if (uf_exp == exp_bit)
+  if (uf_exp == exp_bit) // Inf or NaN
     return uf;
-  else if (!uf_exp)
+  else if (!uf_exp) // Denormalized values
     return uf + (uf & ment_bit);
-  else
+  else // Normalized values
     return (uf + exp_lsb);
 }
