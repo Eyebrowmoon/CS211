@@ -15,18 +15,19 @@
 
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 
-void block_trans_simple(
+void block_trans(
   int M, int N,
   int ii, int jj, int size,
   int A[N][M], int B[M][N]
 );
-void block_trans_no_AB_evict(
+void block_trans_reverse(
   int M, int N,
   int ii, int jj, int size,
   int A[N][M], int B[M][N]
 );
 
 void block_trans_64(int ii, int jj, int A[64][64], int B[64][64]);
+void block_trans_64_reverse(int ii, int jj, int A[64][64], int B[64][64]);
 
 void trans_32(int A[32][32], int B[32][32]);
 void trans_64(int A[64][64], int B[64][64]);
@@ -72,8 +73,7 @@ void block_trans_simple(
       B[j][i] = A[i][j];
 }
 
-
-void block_trans_no_AB_evict(
+void block_trans(
   int M, int N,
   int ii, int jj, int size,
   int A[N][M], int B[M][N])
@@ -87,16 +87,50 @@ void block_trans_no_AB_evict(
   /* Store A[i][i] 
    * because B[i][i] evict A[i]. */
   for (i = ii; i < ibound; i++) {
-    for (j = ii; j < jbound; j++) {
-      if (i != j)
+    for (j = jj; j < jbound; j++) {
+      if ((i - ii) != (j - jj))
         B[j][i] = A[i][j];
       else
         tmp = A[i][j];
     }
 
-    B[i][i] = tmp;
+    B[jj + i - ii][i] = tmp;
   }
 
+}
+
+void block_trans_reverse(
+  int M, int N,
+  int ii, int jj, int size,
+  int A[N][M], int B[M][N])
+{
+  int i, j, tmp;
+  int ibound, jbound;
+
+  ibound = ii + size;
+  jbound = jj + size;
+
+  /* Store A[i][i] 
+   * because B[i][i] evict A[i]. */
+  for (i = ibound - 1; i >= ii; i--) {
+    for (j = jj; j < jbound; j++) {
+      if ((i - ii) != (j - jj))
+        B[j][i] = A[i][j];
+      else
+        tmp = A[i][j];
+    }
+
+    B[jj + i - ii][i] = tmp;
+  }
+
+}
+
+void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
+{
+  if (jj % 8 == 4)
+    block_trans_reverse(64, 64, ii, jj, BSIZE_64, A, B);  
+  else
+    block_trans(64, 64, ii, jj, BSIZE_64, A, B);  
 }
 
 void trans_32(int A[32][32], int B[32][32])
@@ -105,26 +139,9 @@ void trans_32(int A[32][32], int B[32][32])
 
   for (ii = 0; ii < 32; ii += BSIZE) {
     for (jj = 0; jj < 32; jj += BSIZE) {
-      if (ii == jj)
-        block_trans_no_AB_evict(32, 32, ii, jj, BSIZE, A, B);    
-      else
-        block_trans_simple(32, 32, ii, jj, BSIZE, A, B);    
+      block_trans(32, 32, ii, jj, BSIZE, A, B);    
     }
   }
-}
-
-
-void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
-{
-  unsigned long long addrA, addrB;
-
-  addrA = (unsigned long long) &A[ii][jj];
-  addrB = (unsigned long long) &B[jj][ii];
-
-  if ((addrA - addrB) % 1024 == 0)
-    block_trans_no_AB_evict(64, 64, ii, jj, BSIZE_64, A, B);    
-  else
-    block_trans_simple(64, 64, ii, jj, BSIZE_64, A, B);    
 }
 
 void trans_64(int A[64][64], int B[64][64])
