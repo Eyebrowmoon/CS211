@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include "cachelab.h"
 
+#define BSIZE 8
+
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 
 /* 
@@ -22,6 +24,29 @@ int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 {
+  int jj, i, j, tmp;
+  int block_bound;
+  int EM = BSIZE * (M / BSIZE);
+
+  for (jj = 0; jj < EM; jj += BSIZE) {
+    for (i = 0; i < N; i++) {
+      block_bound = jj + BSIZE;
+
+      for (j = jj; j < block_bound; j++) {
+        B[j][i] = A[i][j];
+      }
+    }
+  }    
+
+  if (jj == M)
+    return;
+
+  for (i = 0; i < N; i++) {
+    for (j = jj; j < M; j++) {
+      B[j][i] = A[i][j];
+    }
+  }
+
 }
 
 /* 
