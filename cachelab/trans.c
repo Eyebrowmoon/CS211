@@ -15,19 +15,8 @@
 
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 
-void block_trans(
-  int M, int N,
-  int ii, int jj, int size,
-  int A[N][M], int B[M][N]
-);
-void block_trans_reverse(
-  int M, int N,
-  int ii, int jj, int size,
-  int A[N][M], int B[M][N]
-);
-
+void block_trans_32(int ii, int jj, int A[32][32], int B[32][32]);
 void block_trans_64(int ii, int jj, int A[64][64], int B[64][64]);
-void block_trans_64_reverse(int ii, int jj, int A[64][64], int B[64][64]);
 
 void trans_32(int A[32][32], int B[32][32]);
 void trans_64(int A[64][64], int B[64][64]);
@@ -73,64 +62,90 @@ void block_trans_simple(
       B[j][i] = A[i][j];
 }
 
-void block_trans(
-  int M, int N,
-  int ii, int jj, int size,
-  int A[N][M], int B[M][N])
+void block_trans_32(int ii, int jj, int A[32][32], int B[32][32])
 {
-  int i, j, tmp;
-  int ibound, jbound;
-
-  ibound = ii + size;
-  jbound = jj + size;
+  int i, j;
 
   /* Store A[i][i] 
    * because B[i][i] evict A[i]. */
-  for (i = ii; i < ibound; i++) {
-    for (j = jj; j < jbound; j++) {
+  for (i = ii; i < ii + BSIZE; i++) {
+    for (j = jj; j < jj + BSIZE; j++)
       if ((i - ii) != (j - jj))
         B[j][i] = A[i][j];
-      else
-        tmp = A[i][j];
-    }
 
-    B[jj + i - ii][i] = tmp;
+    B[jj + i - ii][i] = A[i][jj + i - ii];
   }
-
-}
-
-void block_trans_reverse(
-  int M, int N,
-  int ii, int jj, int size,
-  int A[N][M], int B[M][N])
-{
-  int i, j, tmp;
-  int ibound, jbound;
-
-  ibound = ii + size;
-  jbound = jj + size;
-
-  /* Store A[i][i] 
-   * because B[i][i] evict A[i]. */
-  for (i = ibound - 1; i >= ii; i--) {
-    for (j = jj; j < jbound; j++) {
-      if ((i - ii) != (j - jj))
-        B[j][i] = A[i][j];
-      else
-        tmp = A[i][j];
-    }
-
-    B[jj + i - ii][i] = tmp;
-  }
-
 }
 
 void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
 {
-  if (jj % 8 == 4)
-    block_trans_reverse(64, 64, ii, jj, BSIZE_64, A, B);  
-  else
-    block_trans(64, 64, ii, jj, BSIZE_64, A, B);  
+  int i, j;
+  int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
+
+  for (i = ii; i < ii + BSIZE_64; i++) {
+    for (j = jj; j < jj + BSIZE_64; j++)
+      if ((i - ii) != (j - jj))
+        B[j][i] = A[i][j];
+
+    if (i == ii) {
+      tmp0 = A[i][j++];
+      tmp1 = A[i][j++];
+      tmp2 = A[i][j++];
+      tmp3 = A[i][j++];
+    }
+
+    if (i - ii == 1) {
+      tmp4 = A[i][j++];
+      tmp5 = A[i][j++];
+      tmp6 = A[i][j++];
+      tmp7 = A[i][j++];
+    }
+
+    B[jj + i - ii][i] = A[i][jj + i - ii];
+  }
+
+  ii += BSIZE_64;
+  for (i = ii; i < ii + BSIZE_64; i++) {
+    for (j = jj; j < jj + BSIZE_64; j++)
+      if ((i - ii) != (j - jj))
+        B[j][i] = A[i][j];
+
+    B[jj + i - ii][i] = A[i][jj + i - ii];
+  }
+ 
+  jj += BSIZE_64;
+  for (i = ii; i < ii + BSIZE_64; i++) {
+    for (j = jj; j < jj + BSIZE_64; j++)
+      if ((i - ii) != (j - jj))
+        B[j][i] = A[i][j];
+
+    B[jj + i - ii][i] = A[i][jj + i - ii];
+  }
+
+  ii -= BSIZE_64;
+  for (i = ii + 2; i < ii + BSIZE_64; i++) {
+    for (j = jj; j < jj + BSIZE_64; j++)
+      if ((i - ii) != (j - jj))
+        B[j][i] = A[i][j];
+
+    B[jj + i - ii][i] = A[i][jj + i - ii];
+  }
+
+  i = ii;
+  j = jj;
+
+  B[j++][i] = tmp0;
+  B[j++][i] = tmp1;
+  B[j++][i] = tmp2;
+  B[j++][i] = tmp3;
+
+  i = ii + 1;
+  j = jj;
+
+  B[j++][i] = tmp4;
+  B[j++][i] = tmp5;
+  B[j++][i] = tmp6;
+  B[j++][i] = tmp7;
 }
 
 void trans_32(int A[32][32], int B[32][32])
@@ -139,7 +154,7 @@ void trans_32(int A[32][32], int B[32][32])
 
   for (ii = 0; ii < 32; ii += BSIZE) {
     for (jj = 0; jj < 32; jj += BSIZE) {
-      block_trans(32, 32, ii, jj, BSIZE, A, B);    
+      block_trans_32(ii, jj, A, B);    
     }
   }
 }
@@ -151,9 +166,6 @@ void trans_64(int A[64][64], int B[64][64])
   for (ii = 0; ii < 64; ii += BSIZE) {
     for (jj = 0; jj < 64; jj += BSIZE) {
       block_trans_64(ii, jj, A, B);
-      block_trans_64(ii + BSIZE_64, jj, A, B);
-      block_trans_64(ii + BSIZE_64, jj + BSIZE_64, A, B);
-      block_trans_64(ii, jj + BSIZE_64, A, B);
     }
   }
 }

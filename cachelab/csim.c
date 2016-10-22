@@ -59,6 +59,8 @@ struct cache_sim *new_csim(void)
   return csim;
 }
 
+/* Allocate cache memory for cache simulation
+ * s, E value of csim must be valid when this function is called */
 void alloc_cache(struct cache_sim *csim)
 {
   int i;
@@ -135,6 +137,7 @@ void prepend_line(struct cache_set *cset, struct cache_line *cline)
   head_next->prev = cline; 
 }
 
+/* Find a cache having tag of argument */
 struct cache_line *
 find_line(struct cache_set *cset, uint64_t tag)
 {
@@ -151,6 +154,7 @@ find_line(struct cache_set *cset, uint64_t tag)
   return NULL;
 }
 
+/* Find a cache line with invalid bit */
 struct cache_line *
 find_invalid(struct cache_set *cset)
 {
@@ -226,6 +230,7 @@ int is_valid_input(struct cache_sim *csim)
   return (csim->s > 0 && csim->E > 0 && csim->b > 0 && csim->trace_name);
 }
 
+/* Try to access 'addr' and simulate it using csim */
 void access_cache(struct cache_sim *csim, uint64_t addr, int size)
 {
   int s = csim->s, b = csim->b;
@@ -271,6 +276,7 @@ void access_cache(struct cache_sim *csim, uint64_t addr, int size)
   }
 }
 
+/* Read lines of trace and simulate it */
 void simulate(struct cache_sim *csim)
 {
   FILE *f;
