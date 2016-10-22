@@ -11,8 +11,27 @@
 #include "cachelab.h"
 
 #define BSIZE 8
+#define BSIZE_64 4
 
 int is_transpose(int M, int N, int A[N][M], int B[M][N]);
+
+void block_trans_simple(
+  int M, int N,
+  int ii, int jj, int size,
+  int A[N][M], int B[M][N]
+);
+void block_trans_no_AB_evict(
+  int M, int N,
+  int ii, int jj, int size,
+  int A[N][M], int B[M][N]
+);
+
+void block_trans_64(int ii, int jj, int A[64][64], int B[64][64]);
+
+void trans_32(int A[32][32], int B[32][32]);
+void trans_64(int A[64][64], int B[64][64]);
+void trans_otherwise(int M, int N, int A[N][M], int B[M][N]);
+
 
 /* 
  * transpose_submit - This is the solution transpose function that you
@@ -24,7 +43,109 @@ int is_transpose(int M, int N, int A[N][M], int B[M][N]);
 char transpose_submit_desc[] = "Transpose submission";
 void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 {
-  int jj, i, j, tmp;
+  if (M == 32 && N == 32)
+    trans_32(A, B);
+  else if (M == 64 && N == 64)
+    trans_64(A, B);
+  else
+    trans_otherwise(M, N, A, B);
+}
+
+/* 
+ * You can define additional transpose functions below. We've defined
+ * a simple one below to help you get started. 
+ */ 
+
+void block_trans_simple(
+  int M, int N,
+  int ii, int jj, int size,
+  int A[N][M], int B[M][N])
+{
+  int i, j;
+  int ibound, jbound;
+
+  ibound = ii + size;
+  jbound = jj + size;
+ 
+  for (i = ii; i < ibound; i++)
+    for (j = jj; j < jbound; j++)
+      B[j][i] = A[i][j];
+}
+
+
+void block_trans_no_AB_evict(
+  int M, int N,
+  int ii, int jj, int size,
+  int A[N][M], int B[M][N])
+{
+  int i, j, tmp;
+  int ibound, jbound;
+
+  ibound = ii + size;
+  jbound = jj + size;
+
+  /* Store A[i][i] 
+   * because B[i][i] evict A[i]. */
+  for (i = ii; i < ibound; i++) {
+    for (j = ii; j < jbound; j++) {
+      if (i != j)
+        B[j][i] = A[i][j];
+      else
+        tmp = A[i][j];
+    }
+
+    B[i][i] = tmp;
+  }
+
+}
+
+void trans_32(int A[32][32], int B[32][32])
+{
+  int ii, jj;
+
+  for (ii = 0; ii < 32; ii += BSIZE) {
+    for (jj = 0; jj < 32; jj += BSIZE) {
+      if (ii == jj)
+        block_trans_no_AB_evict(32, 32, ii, jj, BSIZE, A, B);    
+      else
+        block_trans_simple(32, 32, ii, jj, BSIZE, A, B);    
+    }
+  }
+}
+
+
+void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
+{
+  unsigned long long addrA, addrB;
+
+  addrA = (unsigned long long) &A[ii][jj];
+  addrB = (unsigned long long) &B[jj][ii];
+
+  if ((addrA - addrB) % 1024 == 0)
+    block_trans_no_AB_evict(64, 64, ii, jj, BSIZE_64, A, B);    
+  else
+    block_trans_simple(64, 64, ii, jj, BSIZE_64, A, B);    
+}
+
+void trans_64(int A[64][64], int B[64][64])
+{
+  int ii, jj;
+  
+  for (ii = 0; ii < 64; ii += BSIZE) {
+    for (jj = 0; jj < 64; jj += BSIZE) {
+      block_trans_64(ii, jj, A, B);
+      block_trans_64(ii + BSIZE_64, jj, A, B);
+      block_trans_64(ii + BSIZE_64, jj + BSIZE_64, A, B);
+      block_trans_64(ii, jj + BSIZE_64, A, B);
+    }
+  }
+}
+
+
+char trans_otherwise_desc[] = "Simple blocked transpose";
+void trans_otherwise(int M, int N, int A[N][M], int B[M][N])
+{
+  int jj, i, j;
   int block_bound;
   int EM = BSIZE * (M / BSIZE);
 
@@ -38,9 +159,6 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N])
     }
   }    
 
-  if (jj == M)
-    return;
-
   for (i = 0; i < N; i++) {
     for (j = jj; j < M; j++) {
       B[j][i] = A[i][j];
@@ -49,10 +167,6 @@ void transpose_submit(int M, int N, int A[N][M], int B[M][N])
 
 }
 
-/* 
- * You can define additional transpose functions below. We've defined
- * a simple one below to help you get started. 
- */ 
 
 /* 
  * trans - A simple baseline transpose function, not optimized for the cache.
