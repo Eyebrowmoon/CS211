@@ -1,7 +1,7 @@
 /* 
  * tsh - A tiny shell program with job control
  * 
- * <Put your name and login ID here>
+ * Park Kanghee, khpark0312
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +24,9 @@
 #define FG 1    /* running in foreground */
 #define BG 2    /* running in background */
 #define ST 3    /* stopped */
+
+/* State macro for addjob */
+#define STATE(bg) (bg + 1)
 
 /* 
  * Jobs states: FG (foreground), BG (background), ST (stopped)
@@ -63,6 +66,23 @@ void waitfg(pid_t pid);
 void sigchld_handler(int sig);
 void sigtstp_handler(int sig);
 void sigint_handler(int sig);
+
+/* My helper functions */
+pid_t Fork(void); 
+void Execve(const char *filename, char *const argv[], char *const envp[]);
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+void Sigemptyset(sigset_t *set);
+void Sigfillset(sigset_t *set);
+void Sigaddset(sigset_t *set, int signum);
+
+int itoa_safe(char *buf, int i);
+ssize_t rio_writen(int fd, void *usrbuf, size_t n);
+void Rio_writen(int fd, void *usrbuf, size_t n);
+
+void deletejob_sync(struct job_t *jobs, pid_t pid);
+void setjobstop_sync(struct job_t *jobs, pid_t pid);
+
+void print_terminate_msg(pid_t pid, int signal);
 
 /* Here are helper routines that we've provided for you */
 int parseline(const char *cmdline, char **argv); 
@@ -165,6 +185,48 @@ int main(int argc, char **argv)
 */
 void eval(char *cmdline) 
 {
+    char *argv[MAXARGS];    /* Argument list execve() */
+    char buf[MAXLINE];      /* Holds modified command line */
+    int bg;                 /* Should the job run in bg or fg? */
+    pid_t pid;              /* Process id */
+    int jid;                /* Job id */
+    sigset_t mask_all, mask_one, prev_one;  /* Signal masks */
+
+    /* Initialize signal masks */
+    Sigfillset(&mask_all);
+    Sigemptyset(&mask_one);
+    Sigaddset(&mask_one, SIGCHLD);
+
+    /* Parse command line */
+    strcpy(buf, cmdline);
+    bg = parseline(buf, argv);
+    if (argv[0] == NULL)
+        return;     /* Ignore empty lines */
+
+    /* Handle command */
+    if (!builtin_cmd(argv)) {
+        Sigprocmask(SIG_BLOCK, &mask_one, &prev_one);   /* Block SIGCHLD */
+        if ((pid = Fork()) == 0) { /* Child runs user job */
+            Sigprocmask(SIG_SETMASK, &prev_one, NULL);  /* Unblock SIGCHLD */
+            setpgid(0, 0);
+            Execve(argv[0], argv, environ);         
+        }    
+
+        Sigprocmask(SIG_BLOCK, &mask_all, NULL);    /* Parent process */
+
+        jid = nextjid;
+        addjob(jobs, pid, STATE(bg), cmdline);
+
+        Sigprocmask(SIG_SETMASK, &prev_one, NULL);  /* Unblock SIGCHLD */
+
+        if (!bg) {  /* Parent waits for foreground job to terminate */
+            snprintf(sbuf, MAXLINE, "-%d", pid);
+            waitfg(pid);
+        }
+        else {
+            printf("[%d] (%d) %s", jid, pid, cmdline);
+        }
+    }
     return;
 }
 
@@ -231,6 +293,15 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv) 
 {
+    if (!strcmp(argv[0], "quit"))   /* quit command */
+        exit(0);
+    if (!strcmp(argv[0], "jobs")) {    /* jobs command */
+        listjobs(jobs);
+        return 1;
+    }
+    if (!strcmp(argv[0], "&"))      /* Ignore singleton & */
+        return 1;
+
     return 0;     /* not a builtin command */
 }
 
@@ -247,7 +318,8 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    return;
+    while (fgpid(jobs) == pid)
+        usleep(1000);
 }
 
 /*****************
@@ -263,7 +335,24 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
-    return;
+    int olderrno = errno;
+    int status;
+    pid_t pid;
+
+    /* Reap zombie childs */
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) { 
+
+        if (WIFEXITED(status)) {
+            deletejob_sync(jobs, pid);
+        } else if (WIFSIGNALED(status)) {
+            deletejob_sync(jobs, pid);
+            print_terminate_msg(pid, WTERMSIG(status));
+        } else if (WIFSTOPPED(status)) {
+            setjobstop_sync(jobs, pid);
+        } 
+    }
+
+    errno = olderrno;
 }
 
 /* 
@@ -273,7 +362,28 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {
-    return;
+    sigset_t mask_all, prev_all;
+    pid_t pid, fg_pid;
+    char gid[12];
+    char *argv[] = {"/bin/kill", "-2", gid, NULL};
+
+    Sigfillset(&mask_all);
+    gid[0] = '-';
+
+    if ((pid = fork()) < 0)
+        _exit(1);
+
+    if (!pid) {  /* Child process */
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        fg_pid = fgpid(jobs);
+        itoa_safe(&gid[1], fg_pid);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+        printf("SIGINT: %d %s\n", fg_pid, gid);
+
+        if (fg_pid && (execve("/bin/kill", argv, environ) < 0))
+            _exit(1);
+    }
 }
 
 /*
@@ -283,12 +393,180 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-    return;
+    sigset_t mask_all, prev_all;
+    pid_t pid, fg_pid;
+    char gid[12];
+    char *argv[] = {"/bin/kill", "-20", gid, NULL};
+
+    Sigfillset(&mask_all);
+    gid[0] = '-';
+
+    if ((pid = fork()) < 0)
+        _exit(1);
+
+    if (!pid) {  /* Child process */
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        fg_pid = fgpid(jobs);
+        itoa_safe(&gid[1], fg_pid);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+        printf("SIGTSTP: %d %s\n", fg_pid, gid);
+
+        if (fg_pid && execve("/bin/kill", argv, environ) < 0)
+            _exit(1);
+    }
+
 }
 
 /*********************
  * End signal handlers
  *********************/
+
+/*********************
+ * My helper functions
+ *********************/
+
+/* fork wrapper which checks the return value */
+pid_t Fork(void)
+{
+    pid_t pid;
+    
+    if ((pid = fork()) < 0)
+        unix_error("Fork error");
+    return pid;   
+}
+
+/* execve wrapper which checks the return value */
+void Execve(const char *filename, char *const argv[], char *const envp[])
+{
+    if (execve(filename, argv, envp) < 0) {
+        printf("%s: Command not found.\n", argv[0]);
+        exit(0);   
+    }
+}
+
+/* Wrapper for signal handler functions which checks the return value, 
+ * but does not print error msg (to make async-signal-safe). */
+void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    if (sigprocmask(how, set, oldset) < 0)
+        _exit(1);
+}
+
+void Sigemptyset(sigset_t *set)
+{
+    if (sigemptyset(set) < 0)
+        _exit(1);
+}
+
+void Sigfillset(sigset_t *set)
+{
+    if (sigfillset(set) < 0)
+        _exit(1);
+}
+
+void Sigaddset(sigset_t *set, int signum)
+{
+    if (sigaddset(set, signum) < 0)
+        _exit(1);
+}
+
+/* Convert int to string,
+ * and return the length of string */
+int itoa_safe(char *buf, int i) {
+    int tmp = i;
+    int length = 0;
+
+    if (i <= 0) /* i > 0 required */
+        return 0;
+    
+    while (tmp > 0) {
+        tmp /= 10;
+        length++;
+    }
+
+    buf += length;
+    *buf = '\0';
+    while (i > 0) {
+        *(--buf) = (i % 10) + '0';
+        i /= 10;
+    }
+
+    return length;
+}
+
+ssize_t rio_writen(int fd, void *usrbuf, size_t n)
+{
+    size_t nleft = n;
+    ssize_t nwritten;
+    char *bufp = usrbuf;
+    
+    while (nleft > 0) {
+        if ((nwritten = write(fd, bufp, nleft)) <= 0) {
+            if (errno == EINTR) /* Interrupted by sig handler return */ 
+                nwritten = 0;   /* and call write() again */
+            else
+                return -1;      /* errno set by write() */
+        }  
+        nleft -= nwritten;
+        bufp += nwritten;
+    }   
+    return n;
+}
+
+void Rio_writen(int fd, void *usrbuf, size_t n)
+{
+    if (rio_writen(fd, usrbuf, n) < 0)
+        _exit(1);    
+}
+
+void deletejob_sync(struct job_t *jobs, pid_t pid)
+{
+    sigset_t mask_all, prev_all;
+    int jid;
+
+    Sigfillset(&mask_all);
+
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    jid = pid2jid(pid);
+    deletejob(jobs, pid);
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+}
+
+void setjobstop_sync(struct job_t *jobs, pid_t pid)
+{
+    struct job_t *job;
+    sigset_t mask_all, prev_all;
+
+    Sigfillset(&mask_all);
+
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    job = getjobpid(jobs, pid);
+    job->state = ST;
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+}
+
+void print_terminate_msg(pid_t pid, int signal)
+{
+    int length;
+    char itoa_buf[12];
+    int jid = pid2jid(pid);
+
+    Rio_writen(1, "Job [", 5);
+    length = itoa_safe(itoa_buf, jid);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, "] (", 3);
+    length = itoa_safe(itoa_buf, (int) pid);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, ") terminated by signal ", 23);
+    length = itoa_safe(itoa_buf, signal);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, "\n", 1);
+}
+
+/*****************************
+ * End my helper function list
+ *****************************/
 
 /***********************************************
  * Helper routines that manipulate the job list
