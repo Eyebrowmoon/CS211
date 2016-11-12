@@ -66,8 +66,7 @@ void block_trans_32(int ii, int jj, int A[32][32], int B[32][32])
 {
   int i, j;
 
-  /* Store A[i][i] 
-   * because B[i][i] evict A[i]. */
+  /* Store diagonal element because they evict each other. */
   for (i = ii; i < ii + BSIZE; i++) {
     for (j = jj; j < jj + BSIZE; j++)
       if ((i - ii) != (j - jj))
@@ -82,6 +81,8 @@ void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
   int i, j;
   int tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
 
+  /* Store diagonal element because they evict each other.
+   * And use tmp variables to store two lines */
   for (i = ii; i < ii + BSIZE_64; i++) {
     for (j = jj; j < jj + BSIZE_64; j++)
       if ((i - ii) != (j - jj))
@@ -104,6 +105,7 @@ void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
     B[jj + i - ii][i] = A[i][jj + i - ii];
   }
 
+  /* Proceed on U shape */
   ii += BSIZE_64;
   for (i = ii; i < ii + BSIZE_64; i++) {
     for (j = jj; j < jj + BSIZE_64; j++)
@@ -131,6 +133,7 @@ void block_trans_64(int ii, int jj, int A[64][64], int B[64][64])
     B[jj + i - ii][i] = A[i][jj + i - ii];
   }
 
+  /* Stored two lines */
   i = ii;
   j = jj;
 
