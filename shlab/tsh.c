@@ -83,6 +83,9 @@ void deletejob_sync(struct job_t *jobs, pid_t pid);
 void setjobstop_sync(struct job_t *jobs, pid_t pid);
 
 void print_terminate_msg(pid_t pid, int signal);
+void print_stop_msg(pid_t pid, int signal);
+
+int isDigit(char *str);
 
 /* Here are helper routines that we've provided for you */
 int parseline(const char *cmdline, char **argv); 
@@ -227,6 +230,7 @@ void eval(char *cmdline)
             printf("[%d] (%d) %s", jid, pid, cmdline);
         }
     }
+
     return;
 }
 
@@ -299,6 +303,10 @@ int builtin_cmd(char **argv)
         listjobs(jobs);
         return 1;
     }
+    if (!strcmp(argv[0], "fg") || !strcmp(argv[0], "bg")) { /* fg, bg command */
+        do_bgfg(argv);
+        return 1;
+    }
     if (!strcmp(argv[0], "&"))      /* Ignore singleton & */
         return 1;
 
@@ -310,7 +318,73 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
-    return;
+    int is_job, jid;
+    struct job_t *job;
+    sigset_t mask_all, prev_all;
+    pid_t pid;
+    char gid[12];
+    char *arg = argv[1];
+    char *execve_argv[] = {"/bin/kill", "-18", gid, NULL};
+    int bg = !strcmp(argv[0], "bg");
+
+    Sigfillset(&mask_all);
+    gid[0] = '-';
+
+    if (arg == NULL) {
+        printf("%s command requires PID or %s argument\n", argv[0], "%jobid");
+        return;
+    }
+
+    is_job = (arg[0] == '%');
+    if (is_job) {
+        if (!isDigit(arg + 1)) {
+            printf("%s: argument must be a PID or %s\n", argv[0], "%jobid");
+            return;
+        }
+
+        jid = atoi(arg + 1);
+        
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        job = getjobjid(jobs, jid);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+        if (!job) {
+            printf("%s: No such job\n", arg);
+            return;    
+        }
+    } else {
+        if (!isDigit(arg)) {
+            printf("%s: argument must be a PID or %s\n", argv[0], "%jobid");
+            return;
+        }
+
+        pid = atoi(arg);
+
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        job = getjobpid(jobs, pid);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+        if (!job) {
+            printf("%s: No such process\n", arg);
+            return;    
+        }
+    }
+
+    itoa_safe(&gid[1], (int) job->pid);
+
+    if ((pid = fork()) < 0)
+        _exit(1);
+
+    if (!pid && execve("/bin/kill", execve_argv, environ) < 0)
+        unix_error("kill (cont) error");
+    else if (pid) {
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        job->state = STATE(bg);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+        if (!bg)
+            waitfg(job->pid);
+    }
 }
 
 /* 
@@ -318,8 +392,19 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
-    while (fgpid(jobs) == pid)
+    pid_t fg_pid;
+    sigset_t mask_all, prev_all;
+
+    Sigfillset(&mask_all);
+
+    do {
         usleep(1000);
+
+        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+        fg_pid = fgpid(jobs);
+        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+    } while (fg_pid == pid);
 }
 
 /*****************
@@ -349,6 +434,7 @@ void sigchld_handler(int sig)
             print_terminate_msg(pid, WTERMSIG(status));
         } else if (WIFSTOPPED(status)) {
             setjobstop_sync(jobs, pid);
+            print_stop_msg(pid, WSTOPSIG(status));
         } 
     }
 
@@ -379,8 +465,6 @@ void sigint_handler(int sig)
         itoa_safe(&gid[1], fg_pid);
         Sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
-        printf("SIGINT: %d %s\n", fg_pid, gid);
-
         if (fg_pid && (execve("/bin/kill", argv, environ) < 0))
             _exit(1);
     }
@@ -409,8 +493,6 @@ void sigtstp_handler(int sig)
         fg_pid = fgpid(jobs);
         itoa_safe(&gid[1], fg_pid);
         Sigprocmask(SIG_SETMASK, &prev_all, NULL);
-
-        printf("SIGTSTP: %d %s\n", fg_pid, gid);
 
         if (fg_pid && execve("/bin/kill", argv, environ) < 0)
             _exit(1);
@@ -562,6 +644,35 @@ void print_terminate_msg(pid_t pid, int signal)
     length = itoa_safe(itoa_buf, signal);
     Rio_writen(1, itoa_buf, length);
     Rio_writen(1, "\n", 1);
+}
+
+void print_stop_msg(pid_t pid, int signal)
+{
+    int length;
+    char itoa_buf[12];
+    int jid = pid2jid(pid);
+
+    Rio_writen(1, "Job [", 5);
+    length = itoa_safe(itoa_buf, jid);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, "] (", 3);
+    length = itoa_safe(itoa_buf, (int) pid);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, ") stopped by signal ", 23);
+    length = itoa_safe(itoa_buf, signal);
+    Rio_writen(1, itoa_buf, length);
+    Rio_writen(1, "\n", 1);
+}
+
+int isDigit(char *str) {
+    char *strr = str;
+
+    while (*strr) {
+        if (!isdigit(*(strr++))) 
+            return 0;
+    }
+
+    return 1;
 }
 
 /*****************************
