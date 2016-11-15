@@ -321,12 +321,9 @@ void do_bgfg(char **argv)
     pid_t pid;          /* Process id*/
     struct job_t *job;  /* Job struct*/
     sigset_t mask_all, prev_all;    /* Signal masks */
-    char gid[12];       /* Buffer for itoa_safe */
     char *arg = argv[1];    /* bg (or fg) argument */
-    char *execve_argv[] = {"/bin/kill", "-18", gid, NULL};  /* argv for execve() */
 
     Sigfillset(&mask_all);
-    gid[0] = '-';
 
     if (arg == NULL) {  /* No argument */
         printf("%s command requires PID or %s argument\n", argv[0], "%jobid");
@@ -368,23 +365,17 @@ void do_bgfg(char **argv)
         }
     }
 
-    itoa_safe(&gid[1], (int) job->pid);
-
-    if ((pid = fork()) < 0)
-        _exit(1);
-
-    if (!pid && execve("/bin/kill", execve_argv, environ) < 0)  /* Child sends SIGCONT */
+    if (kill(-(job->pid), SIGCONT) < 0)  /* Child sends SIGCONT */
         unix_error("kill (cont) error");
-    else if (pid) { /* Parent changes state of the job */
-        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-        job->state = STATE(bg);
-        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
 
-        if (!bg)
-            waitfg(job->pid);
-        else
-            printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
-    }
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    job->state = STATE(bg);
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+    if (!bg)
+        waitfg(job->pid);
+    else
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
 }
 
 /* 
@@ -450,25 +441,16 @@ void sigchld_handler(int sig)
 void sigint_handler(int sig) 
 {
     sigset_t mask_all, prev_all;
-    pid_t pid, fg_pid;
-    char gid[12];
-    char *argv[] = {"/bin/kill", "-2", gid, NULL};
+    pid_t fg_pid;
 
     Sigfillset(&mask_all);
-    gid[0] = '-';
 
-    if ((pid = fork()) < 0)
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    fg_pid = fgpid(jobs);
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+    if (kill(-fg_pid, SIGINT) < 0) /* Send SIGINT */
         _exit(1);
-
-    if (!pid) {  /* Child process */
-        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-        fg_pid = fgpid(jobs);
-        itoa_safe(&gid[1], fg_pid);
-        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
-
-        if (fg_pid && (execve("/bin/kill", argv, environ) < 0)) /* Send SIGINT */
-            _exit(1);
-    }
 }
 
 /*
@@ -479,25 +461,16 @@ void sigint_handler(int sig)
 void sigtstp_handler(int sig) 
 {
     sigset_t mask_all, prev_all;
-    pid_t pid, fg_pid;
-    char gid[12];
-    char *argv[] = {"/bin/kill", "-20", gid, NULL};
+    pid_t fg_pid;
 
     Sigfillset(&mask_all);
-    gid[0] = '-';
 
-    if ((pid = fork()) < 0)
+    Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    fg_pid = fgpid(jobs);
+    Sigprocmask(SIG_SETMASK, &prev_all, NULL);
+
+    if (kill(-fg_pid, SIGTSTP) < 0)   /* Send SIGTSTP */
         _exit(1);
-
-    if (!pid) {  /* Child process */
-        Sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-        fg_pid = fgpid(jobs);
-        itoa_safe(&gid[1], fg_pid);
-        Sigprocmask(SIG_SETMASK, &prev_all, NULL);
-
-        if (fg_pid && execve("/bin/kill", argv, environ) < 0)   /* Send SIGTSTP */
-            _exit(1);
-    }
 
 }
 
