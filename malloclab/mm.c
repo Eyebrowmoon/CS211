@@ -24,27 +24,93 @@
  ********************************************************/
 student_t student = {
     /* POVIS ID */
-    "povisid",
+    "khpark0312",
     /* Your full name */
-    "Gil-Dong Hong",
+    "Kang-Hee Park",
     /* Your email address */
-    "hongildong@postech.edu",
+    "khpark0312@postech.ac.kr",
 };
+
+
+/*********************
+ * CONSTANT AND MACROS
+ *********************/
 
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
-
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
-
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+
+#define NBINS 128
+#define NSMALLBINS 64
+
+#define PREV_INUSE 1
+#define prev_inuse(p) (p->size & PREV_INUSE)
+
+/*******************
+ * TYPES AND STRUCTS
+ *******************/
+
+struct malloc_chunk {
+    size_t prev_size;   /* Used only if free */
+    size_t size;        /* Always used */
+
+    struct malloc_chunk *fd;    /* Used only if free */
+    struct malloc_chunk *bk;
+};
+
+struct malloc_bin {
+    struct malloc_chunk *head;
+    struct malloc_chunk *tail;
+};
+
+struct malloc_state {
+    struct malloc_chunk *top;
+
+    struct malloc_bin bins[NBINS];
+};
+
+/******************
+ * GLOBAL VARIABLES
+ ******************/
+
+static struct malloc_state main_arena;
+
+/************
+ * PROTOTYPES
+ ************/
+
+static void malloc_bin_init(struct malloc_bin *bin);
+static void bins_init(struct malloc_bin *bins, int num);
+
+/*****************
+ * IMPLEMENTATIONS
+ *****************/
+
+/* Consider current bin as a (fake) malloc_chunk */
+static void malloc_bin_init(struct malloc_bin *bin)
+{
+    bin->head = (struct malloc_chunk *) (&bin->head - 2 * sizeof(size_t));
+    bin->tail = bin->head;
+}
+
+static void bins_init(struct malloc_bin *bins, int num)
+{
+    int i;
+    
+    for (i = 0; i < num; i++)
+        malloc_bin_init(&bins[i]);    
+}
 
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
+    bins_init(main_arena.bins, NBINS);
+
     return 0;
 }
 
