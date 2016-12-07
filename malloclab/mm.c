@@ -163,7 +163,10 @@ static int extend_top_chunk(size_t size)
 /* Update prev size of next chunk (if next chunk is valid virtual memory space) */
 static void update_prev_size(struct malloc_chunk *chunk)
 {
-    next_chunk(chunk)->prev_size = chunksize(chunk);
+    struct malloc_chunk *next_chunk = next_chunk(chunk);
+
+    if ((void *)next_chunk < mem_heap_hi())
+        next_chunk(chunk)->prev_size = chunksize(chunk);
 }
 
 /* Append chunk to bin */
@@ -218,8 +221,7 @@ static struct malloc_chunk *split_chunk(struct malloc_chunk *chunk, size_t size)
 
     remainder = (struct malloc_chunk *) ((char *)chunk + size);
     remainder->prev_size = size;
-    remainder->size = chunk_size - size;
-    remainder->size &= ~VALID;
+    remainder->size = (chunk_size - size) & ~VALID;
 
     update_prev_size(remainder);
 
@@ -235,8 +237,9 @@ static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
     struct malloc_chunk *next_chunk = next_chunk(chunk);
     struct malloc_chunk *merged_chunk = chunk;
 
-    if (next_chunk != arena.top && !is_valid(next_chunk)) {
-        unlink_chunk(next_chunk);
+    if (!is_valid(next_chunk)) {
+        if (next_chunk != arena.top)
+            unlink_chunk(next_chunk);
         
         chunk->size += chunksize(next_chunk);
     }
@@ -247,6 +250,13 @@ static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
         prev_chunk->size += chunksize(chunk);
         merged_chunk = prev_chunk;
     }
+
+    merged_chunk->size &= ~VALID;
+
+    if (next_chunk == arena.top)
+        arena.top = merged_chunk;
+    else
+        update_prev_size(merged_chunk);
 
     return merged_chunk;
 }
@@ -259,8 +269,7 @@ int mm_init(void)
     bins_init(arena.bins, NBINS);
 
     arena.top = mem_sbrk(TOP_ALIGNMENT);
-    if (arena.top == (struct malloc_chunk *)-1)
-        return -1;
+    if (arena.top == (struct malloc_chunk *)-1) return -1;
     else
         arena.top->size = TOP_ALIGNMENT;
 
@@ -281,13 +290,13 @@ void *mm_malloc(size_t size)
     p = find_chunk(&arena.bins[UNSORTED], chunksize);
     if (p) {
         unlink_chunk(p);
+
         remainder = split_chunk(p, chunksize);
-        if (remainder) {
+        if (remainder)
             append_chunk(&arena.bins[UNSORTED], remainder);
-        }
+
 
         p->size |= VALID;
-        update_prev_size(p);
 
         return chunk2mem(p);
     }
@@ -312,10 +321,8 @@ void mm_free(void *ptr)
     struct malloc_chunk *chunk = mem2chunk(ptr);
     struct malloc_chunk *merged_chunk = coalesce_chunk(chunk);
 
-    merged_chunk->size &= ~VALID;
-    update_prev_size(merged_chunk);
-
-    append_chunk(&arena.bins[UNSORTED], merged_chunk);
+    if (merged_chunk != arena.top)
+        append_chunk(&arena.bins[UNSORTED], merged_chunk);
 }
 
 /*
