@@ -48,8 +48,13 @@ student_t student = {
 
 #define UNSORTED 0
 
-#define NBINS 128
-#define NSMALLBINS 64
+#define NBINS 121
+#define NSMALLBINS 62
+
+#define MIN_LARGE_SIZE ((NSMALLBINS + 2) << 3)
+
+#define is_smallbin_range(size) (size < MIN_LARGE_SIZE)
+#define smallbin_index(size) ((size >> 3) - 1)
 
 #define VALID 1
 #define PREV_INUSE 2
@@ -96,14 +101,14 @@ struct malloc_state {
      * 
      * There is no fast bin
      * Single unsorted bin
-     * 64 small bins with size 8
-     * 63 large bins with
-     *   - 32 bins with size 64
-     *   - 16 bins with size 512
-     *   - 8 bins with size 4096
-     *   - 4 bins with size 32768
-     *   - 2 bins with size 262144
-     *   - 1 bins for left
+     * 62 small bins with size 8 (size 16 ~ 511)
+     * 58 large bins with
+     *   - 32 bins with size 64 (size 528 ~ 2559)
+     *   - 11 bins with size 512 (size 2560 ~ 8191)
+     *   - 6 bins with size 4096 (size 8192 ~ 32767)
+     *   - 7 bins with size 32768 (size 32768 ~ 262143)
+     *   - 1 bins with size 262144 (size 262144 ~ 524287)
+     *   - 1 bins for left (size 524288 ~ )
      * */
     struct malloc_bin bins[NBINS];
 };
@@ -121,15 +126,19 @@ static struct malloc_state arena;
 static void malloc_bin_init(struct malloc_bin *bin);
 static void bins_init(struct malloc_bin *bins, int num);
 
-static int extend_top_chunk(size_t size);
+static int bin_index(size_t size);
 
+static int extend_top_chunk(size_t size);
 static void update_prev_info(struct malloc_chunk *chunk);
 
 static void append_chunk(struct malloc_bin *bin, struct malloc_chunk *chunk);
-static struct malloc_chunk *find_chunk(struct malloc_bin *bin, size_t size);
+static struct malloc_chunk *find_chunk(size_t size);
 static void unlink_chunk(struct malloc_chunk *chunk);
 static struct malloc_chunk *split_chunk(struct malloc_chunk *chunk, size_t size);
+static struct malloc_chunk *split_top_chunk(size_t size);
+static void split_and_append(struct malloc_chunk *chunk, size_t size);
 static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk);
+static struct malloc_chunk *realloc_chunk(struct malloc_chunk *chunk, size_t size);
 
 /*****************
  * IMPLEMENTATIONS
@@ -149,6 +158,25 @@ static void bins_init(struct malloc_bin *bins, int num)
     
     for (i = 0; i < num; i++)
         malloc_bin_init(&bins[i]);    
+}
+
+/* Calculate corresponding large bin index */
+static int bin_index(size_t size)
+{
+    if (is_smallbin_range(size))
+        return smallbin_index(size);
+    else if (size < 2560)
+        return 55 + (size >> 6);
+    else if (size < 8192)
+        return 90 + (size >> 9);
+    else if (size < 32768)
+        return 104 + (size >> 12);
+    else if (size < 262144)
+        return 110 + (size >> 15);
+    else if (size < 524288)
+        return 119;
+    else
+        return 120;
 }
 
 /* Extend top chunk as much as required */
@@ -186,12 +214,19 @@ static void append_chunk(struct malloc_bin *bin, struct malloc_chunk *chunk)
 }
 
 /* Find free chunk with size larger than given size */
-static struct malloc_chunk *find_chunk(struct malloc_bin *bin, size_t size)
+static struct malloc_chunk *find_chunk(size_t size)
 {
-    struct malloc_chunk *last = mem2chunk(bin);
+    struct malloc_chunk *last;
     struct malloc_chunk *cur_chunk;
-   
-    for (cur_chunk = bin->head; cur_chunk != last; cur_chunk = cur_chunk->fd) {
+    int bin_idx = bin_index(size);
+    
+    for (; bin_idx < NBINS; bin_idx++)
+        if (arena.bins[bin_idx].tail != mem2chunk(&arena.bins[bin_idx])
+            && arena.bins[bin_idx].head->size >= size)
+            return arena.bins[bin_idx].head;
+
+    last = mem2chunk(&arena.bins[UNSORTED]);
+    for (cur_chunk = arena.bins[UNSORTED].head; cur_chunk != last; cur_chunk = cur_chunk->fd) {
         if (chunksize(cur_chunk) >= size)
             return cur_chunk;
     }
@@ -234,6 +269,33 @@ static struct malloc_chunk *split_chunk(struct malloc_chunk *chunk, size_t size)
     return remainder;
 }
 
+/* Split top chunk and expand if needed */
+static struct malloc_chunk *split_top_chunk(size_t size)
+{
+    struct malloc_chunk *top = arena.top;
+
+    if (top->size < size + 2 * sizeof(struct malloc_chunk))
+        if (extend_top_chunk(size) < 0)
+            return NULL;
+
+    arena.top = split_chunk(top, size);
+    return top;
+}
+
+/* Split and append remainder to corresponding bin (if remainder is not NULL) */
+static void split_and_append(struct malloc_chunk *chunk, size_t size)
+{
+    struct malloc_chunk *remainder;
+    int bin_idx;
+
+    remainder = split_chunk(chunk, size);
+    if (remainder) {
+        bin_idx = bin_index(remainder->size);
+        append_chunk(&arena.bins[bin_idx], remainder);
+    }
+}
+
+
 /* Coalesce chunks with nearby chunks */
 static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
 {
@@ -261,6 +323,43 @@ static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
     return merged_chunk;
 }
 
+static struct malloc_chunk *realloc_chunk(struct malloc_chunk *chunk, size_t size)
+{
+    void *oldptr, *newptr;
+    struct malloc_chunk *next_chunk = next_chunk(chunk);
+    size_t required_size = size2chunksize(size) - chunksize(chunk);
+
+    /* If there is space on next of chunk */
+    if (!is_valid(next_chunk) && chunksize(next_chunk) >= required_size) {
+        if (next_chunk == arena.top) {
+            if (!split_top_chunk(required_size))
+                return NULL;
+        } else
+            split_and_append(next_chunk, required_size);
+
+        chunk->size += chunksize(next_chunk);
+
+        next_chunk = next_chunk(chunk);
+        
+        next_chunk->prev_size = chunksize(chunk);
+        next_chunk->size |= PREV_INUSE;
+
+        return chunk2mem(chunk);
+    }
+    else { /* If there is no space */
+        oldptr = chunk2mem(chunk);
+        newptr = mm_malloc(size);
+        if (newptr == NULL)
+            return NULL;
+        
+        memcpy(newptr, oldptr, size);
+        
+        mm_free(oldptr);
+        
+        return newptr;
+    }
+}
+
 /* 
  * mm_init - initialize the malloc package.
  */
@@ -283,23 +382,16 @@ int mm_init(void)
 void *mm_malloc(size_t size)
 {
     size_t chunk_size = size2chunksize(size);
-    struct malloc_chunk *p, *remainder;
-    struct malloc_chunk *top = arena.top;
+    struct malloc_chunk *p;
 
     /* Try to find from unsorted bin */
-    p = find_chunk(&arena.bins[UNSORTED], chunk_size);
+    p = find_chunk(chunk_size);
     if (p) {
         unlink_chunk(p);
-        remainder = split_chunk(p, chunk_size);
-        if (remainder)
-            append_chunk(&arena.bins[UNSORTED], remainder);
+        split_and_append(p, chunk_size);
     } else {
-        if (top->size < chunk_size + 2 * sizeof(struct malloc_chunk))
-            if (extend_top_chunk(chunk_size) < 0)
-                return NULL;
-
-        p = top;
-        arena.top = split_chunk(p, chunk_size);
+        p = split_top_chunk(chunk_size);
+        if (!p) return NULL;
     }
 
     p->size |= VALID;
@@ -329,28 +421,18 @@ void mm_free(void *ptr)
 void *mm_realloc(void *ptr, size_t size)
 {
     struct malloc_chunk *chunk = mem2chunk(ptr);
-    struct malloc_chunk *remainder;
     size_t chunk_size = size2chunksize(size);
-    void *oldptr = ptr;
-    void *newptr;
     
-    if (!ptr) return mm_malloc(size);
+    if (!ptr)
+        return mm_malloc(size);
     else if (!size) {
         mm_free(ptr);
         return NULL;
     } else if (chunk->size >= chunk_size) {
-        remainder = split_chunk(chunk, chunk_size);
-        if (remainder)
-            append_chunk(&arena.bins[UNSORTED], remainder);
+        split_and_append(chunk, chunk_size);
         return chunk2mem(chunk);
-    } else {
-        newptr = mm_malloc(size);
-        if (newptr == NULL)
-          return NULL;
-        memcpy(newptr, oldptr, size);
-        mm_free(oldptr);
-        return newptr;
-    }
+    } else
+        return realloc_chunk(chunk, size);
 }
 
 
