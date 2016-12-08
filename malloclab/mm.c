@@ -44,7 +44,7 @@ student_t student = {
 #define TOP_ALIGNMENT 8
 #define TOP_ALIGN(size) (((size) + (TOP_ALIGNMENT-1)) & ~(TOP_ALIGNMENT-1))
 
-#define NUMPREPARED 3
+#define NUMPREPARED 1
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
@@ -337,7 +337,7 @@ static struct malloc_chunk *split_top_chunk(size_t size)
  * and prepare some additional free chunk */
 static struct malloc_chunk *split_top_chunk_prepared(size_t size)
 {
-    size_t prepared_size = NUMPREPARED * size;
+    size_t prepared_size = 280;
     struct malloc_chunk *chunk, *top = arena.top;
 
     if (chunksize(top) < size + prepared_size + 2 * sizeof(struct malloc_chunk))
@@ -401,14 +401,22 @@ static struct malloc_chunk *realloc_chunk(struct malloc_chunk *chunk, size_t siz
     struct malloc_chunk *next_chunk = next_chunk(chunk);
     size_t required_size = size2chunksize(size) - chunksize(chunk);
 
+    /* If the next chunk is top chunk */
+    if (next_chunk == arena.top) {
+        if (!split_top_chunk(required_size))
+            return NULL;
+    
+        chunk->size += chunksize(next_chunk);
+
+        next_chunk = next_chunk(chunk);
+        next_chunk->prev_size = chunksize(chunk);
+        next_chunk->size |= PREV_INUSE;
+
+        return chunk2mem(chunk);
+    }
     /* If there is space on next of chunk */
-    if (next_chunk == arena.top ||
-        (!is_valid(next_chunk) && chunksize(next_chunk) >= required_size)) {
-        if (next_chunk == arena.top) {
-            if (!split_top_chunk(required_size))
-                return NULL;
-        } else
-            split_and_append(next_chunk, required_size);
+    else if (!is_valid(next_chunk) && chunksize(next_chunk) >= required_size) {
+        split_and_append(next_chunk, required_size);
 
         chunk->size += chunksize(next_chunk);
 
