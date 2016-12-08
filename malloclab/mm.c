@@ -41,10 +41,10 @@ student_t student = {
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~(ALIGNMENT-1))
 
-#define TOP_ALIGNMENT 8
+#define TOP_ALIGNMENT 256
 #define TOP_ALIGN(size) (((size) + (TOP_ALIGNMENT-1)) & ~(TOP_ALIGNMENT-1))
 
-#define NUMPREPARED 1
+#define PREPARED_SIZE 280
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
@@ -238,8 +238,7 @@ static struct malloc_chunk *find_chunk(size_t size)
     
     for (; bin_idx < NBINS; bin_idx++) {
         cur_chunk = find_chunk_from_bin(&arena.bins[bin_idx], size);
-        if (cur_chunk)
-            return cur_chunk;
+        if (cur_chunk) return cur_chunk;
     }
 
     last = mem2chunk(&arena.bins[UNSORTED]);
@@ -337,14 +336,13 @@ static struct malloc_chunk *split_top_chunk(size_t size)
  * and prepare some additional free chunk */
 static struct malloc_chunk *split_top_chunk_prepared(size_t size)
 {
-    size_t prepared_size = 280;
     struct malloc_chunk *chunk, *top = arena.top;
 
-    if (chunksize(top) < size + prepared_size + 2 * sizeof(struct malloc_chunk))
-        if (extend_top_chunk(size + prepared_size) < 0)
+    if (chunksize(top) < size + PREPARED_SIZE + 2 * sizeof(struct malloc_chunk))
+        if (extend_top_chunk(size + PREPARED_SIZE) < 0)
             return NULL;
 
-    chunk = split_chunk(top, prepared_size);
+    chunk = split_chunk(top, PREPARED_SIZE);
     chunk->size &= ~PREV_INUSE;
     append_chunk(&arena.bins[UNSORTED], top);
 
@@ -375,6 +373,7 @@ static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
     struct malloc_chunk *next_chunk = next_chunk(chunk);
     struct malloc_chunk *merged_chunk = chunk;
 
+    /* Merge with next chunk */
     if (!is_valid(next_chunk)) {
         if (next_chunk != arena.top)
             unlink_chunk(next_chunk);
@@ -382,6 +381,7 @@ static struct malloc_chunk *coalesce_chunk(struct malloc_chunk *chunk)
         chunk->size += chunksize(next_chunk);
     }
 
+    /* Merge with prev chunk */
     if (!prev_inuse(chunk)) {
         unlink_chunk(prev_chunk);
 
