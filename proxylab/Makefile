@@ -3,8 +3,8 @@
 # You may modify this file any way you like (except for the handin
 # rule). You instructor will type "make" on your specific Makefile to
 # build your proxy from sources.
-POVIS_ID=HELLO
-STD_NUM= 1111111
+POVIS_ID = khpark0312
+STD_NUM = 20150888
 CC = gcc
 CFLAGS = -g -Wall
 LDFLAGS = -lpthread
