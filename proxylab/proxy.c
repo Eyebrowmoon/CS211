@@ -12,7 +12,7 @@ static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64;
 static const char *connection_hdr = "Connection: close\r\n";
 static const char *proxy_connection_hdr = "Proxy-Connection: close\r\n";
 
-void handle_request(int fd);
+void *handle_request(void *fdp);
 void read_requesthdrs(rio_t *rp);
 int parse_url(char *uri, char *hostname, char *port, char *remaining);
 void clienterror(int fd, char *cause, char *errnum, 
@@ -21,10 +21,11 @@ void send_request(int fd, char *hostname, char *remaining);
 
 int main(int argc, char *argv[])
 {
-    int listenfd, connfd;
+    int listenfd, *connfdp;
     char hostname[MAXLINE], port[MAXLINE];
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
+    pthread_t tid;
 
     /* Check command line args */
     if (argc != 2) {
@@ -35,12 +36,12 @@ int main(int argc, char *argv[])
     listenfd = Open_listenfd(argv[1]);
     while (1) {
 	clientlen = sizeof(clientaddr);
-	connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+        connfdp = Malloc(sizeof(int));
+	*connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
         Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
                     port, MAXLINE, 0);
-        printf("Accepted connection from (%s, %s)\n", hostname, port);
-	handle_request(connfd);                                   
-        Close(connfd);                                            
+        printf("Accepted connection from (%s, %s)\n", hostname, port);      
+        Pthread_create(&tid, NULL, handle_request, connfdp);                                           
     }
     return 0;
 }
@@ -48,24 +49,28 @@ int main(int argc, char *argv[])
 /*
  * handle_request - handle one HTTP request/response transaction
  */
-void handle_request(int fd) 
+void *handle_request(void *fdp) 
 {
     char buf[MAXLINE], method[MAXLINE], url[MAXLINE], version[MAXLINE];
     char hostname[MAXLINE], port[MAXLINE], remaining[MAXLINE];
     rio_t rio, hostrio;
-    int hostfd;
+    int fd, hostfd;
     ssize_t read_amount;
+
+    fd = *((int *)fdp);
+    Pthread_detach(pthread_self());
+    Free(fdp);
 
     /* Read request line and headers */
     Rio_readinitb(&rio, fd);
     if (!Rio_readlineb(&rio, buf, MAXLINE))
-        return;
+        return NULL;
     printf("%s", buf);
     sscanf(buf, "%s %s %s", method, url, version);       
     if (strcasecmp(method, "GET")) {                     
         clienterror(fd, method, "501", "Not Implemented",
                     "Proxy server does not implement this method");
-        return;
+        return NULL;
     }                                                    
     read_requesthdrs(&rio);                              
 
@@ -79,7 +84,10 @@ void handle_request(int fd)
     while ((read_amount = Rio_readlineb(&hostrio, buf, MAXLINE)))
         Rio_writen(fd, buf, read_amount); 
     
+    Close(fd);
     Close(hostfd);
+
+    return NULL;
 }
 
 /*
