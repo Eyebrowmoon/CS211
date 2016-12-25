@@ -30,7 +30,7 @@ typedef struct {
 void init_cache(cache_t *cache);
 void free_cache(cache_t *cache);
 
-int add_object(cache_t *cache, char *url, char *data, size_t size);
+void add_object(cache_t *cache, char *url, char *data, size_t size);
 struct cache_object *find_object(cache_t *cache, char *url);
 
 #endif

@@ -1,6 +1,7 @@
 #include "cache.h"
 #include <stdlib.h>
 #include <string.h>
+#include "csapp.h"
 
 /* Initialize the cache */
 void init_cache(cache_t *cache)
@@ -12,11 +13,11 @@ void init_cache(cache_t *cache)
     head->next = tail;
     tail->prev = head;
 
-    total_size = 0;
-    Sem_init(&mutex, 0, 1);     
+    cache->total_size = 0;
+    Sem_init(&cache->mutex, 0, 1);     
     cache->head = head;
     cache->tail = tail;
-    next_victim = NULL;
+    cache->next_victim = NULL;
 }
 
 /* Free all the object of cache */
@@ -37,7 +38,7 @@ void free_cache(cache_t *cache)
 }
 
 /* Add new object to memory */
-int add_object(cache_t *cache, char *url, char *data, size_t size)
+void add_object(cache_t *cache, char *url, char *data, size_t size)
 {
     struct cache_object *object;
     struct cache_object *head, *head_next;
@@ -68,4 +69,21 @@ int add_object(cache_t *cache, char *url, char *data, size_t size)
     V(&cache->mutex);
 }
 
+/* Find object with given url */
+struct cache_object *find_object(cache_t *cache, char *url)
+{
+    struct cache_object *object;
+    
+    for (object = cache->tail->prev; object != cache->head; 
+            object = object->prev) {
 
+        printf(url);
+
+        if (!strcmp(object->url, url)) {
+            object->chance = 1;
+            return object;
+        }
+    }    
+
+    return NULL;
+}

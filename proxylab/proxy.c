@@ -15,6 +15,9 @@ int parse_url(char *uri, char *hostname, char *port, char *remaining);
 void clienterror(int fd, char *cause, char *errnum, 
                  char *shortmsg, char *longmsg);
 void send_request(int fd, char *hostname, char *remaining);
+void pass_response(char *url, int hostfd, int fd);
+
+static cache_t cache;
 
 int main(int argc, char *argv[])
 {
@@ -30,6 +33,8 @@ int main(int argc, char *argv[])
 	exit(1);
     }
 
+    init_cache(&cache);
+
     listenfd = Open_listenfd(argv[1]);
     while (1) {
 	clientlen = sizeof(clientaddr);
@@ -40,6 +45,9 @@ int main(int argc, char *argv[])
         printf("Accepted connection from (%s, %s)\n", hostname, port);      
         Pthread_create(&tid, NULL, handle_request, connfdp);                                           
     }
+
+    free_cache(&cache);
+
     return 0;
 }
 
@@ -50,9 +58,9 @@ void *handle_request(void *fdp)
 {
     char buf[MAXLINE], method[MAXLINE], url[MAXLINE], version[MAXLINE];
     char hostname[MAXLINE], port[MAXLINE], remaining[MAXLINE];
-    rio_t rio, hostrio;
+    rio_t rio;
     int fd, hostfd;
-    ssize_t read_amount;
+    struct cache_object *object;
 
     fd = *((int *)fdp);
     Pthread_detach(pthread_self());
@@ -73,18 +81,50 @@ void *handle_request(void *fdp)
 
     /* Parse URL from GET request */
     if (parse_url(url, hostname, port, remaining)) {
+
+        object = find_object(&cache, url);
+        if (object) {
+            Rio_writen(fd, object->data, object->size); 
+            return NULL;
+        }
+
         hostfd = Open_clientfd(hostname + URL_HEADER_LEN, port);
         send_request(hostfd, hostname, remaining);
     }
 
-    Rio_readinitb(&hostrio, hostfd);
-    while ((read_amount = Rio_readlineb(&hostrio, buf, MAXLINE)))
-        Rio_writen(fd, buf, read_amount); 
+    pass_response(url, hostfd, fd);
     
     Close(fd);
     Close(hostfd);
 
     return NULL;
+}
+
+/*
+ * pass_response - pass response from server to client
+ */
+void pass_response(char *url, int hostfd, int fd)
+{
+    char buf[MAXLINE];
+    rio_t rio;
+    ssize_t read_amount, read_amount_total = 0;
+    char *data = Malloc(MAX_OBJECT_SIZE);
+ 
+    Rio_readinitb(&rio, hostfd);
+
+    while ((read_amount = Rio_readlineb(&rio, buf, MAXLINE))) {
+        Rio_writen(fd, buf, read_amount); 
+
+        if (read_amount_total + read_amount <= MAX_OBJECT_SIZE)
+            memcpy(data + read_amount_total, buf, read_amount);
+        read_amount_total += read_amount;
+    }
+
+    if (read_amount_total <= MAX_OBJECT_SIZE) {
+        add_object(&cache, url, data, read_amount_total);
+    }
+
+    Free(data);
 }
 
 /*
