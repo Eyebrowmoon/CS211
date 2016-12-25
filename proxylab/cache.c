@@ -3,6 +3,9 @@
 #include <string.h>
 #include "csapp.h"
 
+static void evict_object(cache_t *cache);
+static struct cache_object *find_victim(cache_t *cache);
+
 /* Initialize the cache */
 void init_cache(cache_t *cache)
 {
@@ -17,7 +20,6 @@ void init_cache(cache_t *cache)
     Sem_init(&cache->mutex, 0, 1);     
     cache->head = head;
     cache->tail = tail;
-    cache->next_victim = NULL;
 }
 
 /* Free all the object of cache */
@@ -42,6 +44,9 @@ void add_object(cache_t *cache, char *url, char *data, size_t size)
 {
     struct cache_object *object;
     struct cache_object *head, *head_next;
+
+    while (cache->total_size > MAX_CACHE_SIZE - size)
+        evict_object(cache);
 
     /* Allocate memory dynamically */
     object = (struct cache_object *) Malloc(sizeof(struct cache_object));
@@ -76,9 +81,6 @@ struct cache_object *find_object(cache_t *cache, char *url)
     
     for (object = cache->tail->prev; object != cache->head; 
             object = object->prev) {
-
-        printf(url);
-
         if (!strcmp(object->url, url)) {
             object->chance = 1;
             return object;
@@ -86,4 +88,29 @@ struct cache_object *find_object(cache_t *cache, char *url)
     }    
 
     return NULL;
+}
+
+static void evict_object(cache_t *cache) {
+    struct cache_object *victim = find_victim(cache);
+    
+    victim->next->prev = victim->prev;
+    victim->prev->next = victim->next;
+
+    if (victim->data)
+        Free(victim->data);
+    Free(victim);   
+}
+
+static struct cache_object *find_victim(cache_t *cache) {
+    struct cache_object *object;
+    
+    for (object = cache->tail->prev; object != cache->head; 
+            object = object->prev) {
+        if (1 == object->chance)
+            object->chance = 0;
+        else
+            return object;
+    }
+
+    return cache->tail->prev;
 }

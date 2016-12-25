@@ -23,8 +23,6 @@ typedef struct {
 
     struct cache_object *head;  /* First cached object */
     struct cache_object *tail;  /* Last cached object */
-
-    struct cache_object *next_victim;
 } cache_t;
 
 void init_cache(cache_t *cache);
